@@ -1,373 +1,354 @@
 
 
-	var map;
-	var overlayLayers;
-	var overlaySelected;
-	var baseLayers; // base layers include Google, Bing and OS maps, and OpenStreetMap
-	var opacity = 1;
-
-// The parameters for the British National Grid - EPSG:27700
-
-	proj4.defs("EPSG:27700", "+proj=tmerc +lat_0=49 +lon_0=-2 +k=0.9996012717 +x_0=400000 +y_0=-100000 +ellps=airy +datum=OSGB36 +units=m +no_defs");
 
 
-// This code below converts the lat lon into a British National Grid Reference. With thanks from http://www.movable-type.co.uk/scripts/latlong-gridref.html NT261732
 
-    function gridrefNumToLet(e, n, digits) {
-        // get the 100km-grid indices
-        var e100k = Math.floor(e / 100000),
-        n100k = Math.floor(n / 100000);
+// sets marker at location
 
-        if (e100k < 0 || e100k > 6 || n100k < 0 || n100k > 12) return '';
-
-        // translate those into numeric equivalents of the grid letters
-        var l1 = (19 - n100k) - (19 - n100k) % 5 + Math.floor((e100k + 10) / 5);
-        var l2 = (19 - n100k) * 5 % 25 + e100k % 5;
-
-        // compensate for skipped 'I' and build grid letter-pairs
-        if (l1 > 7) l1++;
-        if (l2 > 7) l2++;
-        var letPair = String.fromCharCode(l1 + 'A'.charCodeAt(0), l2 + 'A'.charCodeAt(0));
-
-        // strip 100km-grid indices from easting & northing, and reduce precision
-        e = Math.floor((e % 100000) / Math.pow(10, 5 - digits / 2));
-        n = Math.floor((n % 100000) / Math.pow(10, 5 - digits / 2));
-
-        Number.prototype.padLZ = function(w) {
-            var n = this.toString();
-            while (n.length < w) n = '0' + n;
-            return n;
-        }
-
-        var gridRef = letPair + e.padLZ(digits / 2) + n.padLZ(digits / 2);
-
-        return gridRef;
-    }
-	function gridrefLetToNum(gridref) {
-	  // get numeric values of letter references, mapping A->0, B->1, C->2, etc:
-	  var l1 = gridref.toUpperCase().charCodeAt(0) - 'A'.charCodeAt(0);
-	  var l2 = gridref.toUpperCase().charCodeAt(1) - 'A'.charCodeAt(0);
-	  // shuffle down letters after 'I' since 'I' is not used in grid:
-	  if (l1 > 7) l1--;
-	  if (l2 > 7) l2--;
-
-	  // convert grid letters into 100km-square indexes from false origin (grid square SV):
-	  var e = ((l1-2)%5)*5 + (l2%5);
-	  var n = (19-Math.floor(l1/5)*5) - Math.floor(l2/5);
-
-	  // skip grid letters to get numeric part of ref, stripping any spaces:
-	  gridref = gridref.slice(2).replace(/ /g,'');
-
-	  // append numeric part of references to grid index:
-	  e += gridref.slice(0, gridref.length/2);
-	  n += gridref.slice(gridref.length/2);
-
-	  // normalise to 1m grid, rounding up to centre of grid square:
-	  switch (gridref.length) {
-		case 2: e += '5000'; n += '5000'; break;
-	    case 4: e += '500'; n += '500'; break;
-	    case 6: e += '50'; n += '50'; break;
-	    case 8: e += '5'; n += '5'; break;
-	    // 10-digit refs are already 1m
-	  }
-
-	  return [e, n];
+	function showMarker(loc) {
+	    marker.setPosition(loc);
 	}
 
+// convert from latitude and longitude to a simple (elliptical) Mercator projection
+// from http://wiki.openstreetmap.org/wiki/Mercator#JavaScript_.28or_ActionScript.29_implementation
 
+	function deg_rad(ang) {
+	    return ang * (Math.PI/180.0)
+	}
+	function merc_x(lon) {
+	    var r_major = 6378137.000;
+	    return r_major * deg_rad(lon);
+	}
+	function merc_y(lat) {
+	    if (lat > 89.5)
+	        lat = 89.5;
+	    if (lat < -89.5)
+	        lat = -89.5;
+	    var r_major = 6378137.000;
+	    var r_minor = 6356752.3142;
+	    var temp = r_minor / r_major;
+	    var es = 1.0 - (temp * temp);
+	    var eccent = Math.sqrt(es);
+	    var phi = deg_rad(lat);
+	    var sinphi = Math.sin(phi);
+	    var con = eccent * sinphi;
+	    var com = .5 * eccent;
+	    con = Math.pow((1.0-con)/(1.0+con), com);
+	    var ts = Math.tan(.5 * (Math.PI*0.5 - phi))/con;
+	    var y = 0 - r_major * Math.log(ts);
+	    return y;
+	}
+	function merc(x,y) {
+	    return [merc_x(x),merc_y(y)];
+	}
 
-// OpenStreetMap
-	var osm = new ol.layer.Tile({
-	                        title: 'Background map - OpenStreetMap',
-	  source: new ol.source.OSM({
-	    // attributions: [ol.source.OSM.DATA_ATTRIBUTION],
-	    url: 'http://{a-c}.tile.openstreetmap.org/{z}/{x}/{y}.png'
-	  })/*,
-	  opacity: 0.7*/
-	});
+// main function retrieving maps through Web Feature Service
 
-
-       var mapMQ = new ol.layer.Tile({
-		title: 'Background map - MapQuest Map',
-		type: 'base', 
-                source: new ol.source.MapQuest({
-                            layer: 'osm'
-                })
-        });
-
-       var mapMQsat = new ol.layer.Tile({
-		title: 'Background map - MapQuest Satellite',
-		type: 'base', 
-                source: new ol.source.MapQuest({
-                            layer: 'sat'
-                })
-        });
-
-       var mapMQhyb = new ol.layer.Tile({
-		title: 'Background map - MapQuest Hybrid',
-		type: 'base', 
-                source: new ol.source.MapQuest({
-                            layer: 'hyb'
-                })
-        });
-
-// Bing API key - please generate your own
-
-	var BingapiKey = "AgS4SIQqnI-GRV-wKAQLwnRJVcCXvDKiOzf9I1QpUQfFcnuV82wf1Aw6uw5GJPRz";
-
-	var BingSatellite =   new ol.layer.Tile({
-		title: 'Background map - Bing Satellite',
-		type: 'base', 
-	        source: new ol.source.BingMaps({
-			key: BingapiKey,
-			imagerySet: 'Aerial'
-		    })
-	});
-
-// Bing layers
-
-	var BingRoad = new ol.layer.Tile({
-	         title: 'Background map - Bing Road',
-	         type: 'base',
-	         source: new ol.source.BingMaps({
-		      key: BingapiKey,
-		      imagerySet: 'Road'
-		    })
-	});
-
-	var BingAerialWithLabels = new ol.layer.Tile({
-	          title: 'Background map - Bing Hybrid',
-	          type: 'base',
-	          source: new ol.source.BingMaps({
-			key: BingapiKey,
-			imagerySet: 'AerialWithLabels'
-		})
-	});
-
-
-// Stamen layers
-	var StamenWatercolor =  new ol.layer.Tile({
-	           title: 'Background map - Water color',
-	           type: 'base',
-	           source: new ol.source.Stamen({
-	                  layer: 'watercolor'
-	           })
-	});
-
-
-	var OS1920s =  	new ol.layer.Tile({
-	            title: 'Background map - OS 1920s',
-	            type: 'base',
-		    source: new ol.source.XYZ({
-			          attributions: [
-			            new ol.Attribution({html: '<a href=\'http://maps.nls.uk/projects/api/\'>NLS Historic Maps API</a>'})
-			          ],
-				url: 'http://geo.nls.uk/maps/api/nls/{z}/{x}/{y}.jpg',
-				// minZoom: 10,
-				maxZoom: 13,
-				tilePixelRatio: 1
-		})
-          });
-
-
-	var OSOpendata = new ol.layer.Tile({
-	              title: 'Background map - OS Opendata',
-	              type: 'base',
-		      source: new ol.source.XYZ({
-		      		    attributions: [new ol.Attribution({html: 'Contains OS data &copy; Crown copyright and database right 2011'})],
-				    url: 'http://geo.nls.uk/maps/opendata/{z}/{x}/{y}.png',
-				    // minZoom: 10,
-				    maxZoom: 16,
-				    tilePixelRatio: 1
-				  })
-	                    });
-
-// an array of the base layers listed above
-
-	var baseLayers = [ BingAerialWithLabels, BingSatellite, BingRoad, osm, OSOpendata, OS1920s, mapMQ, mapMQsat ];
-
-
-// sets up the base layers as a set of radio buttons
-
-	    var layerSelect = document.getElementById('layerSelect');
-	    for (var x = 0; x < baseLayers.length; x++) {
-	        // if (!baseLayers[x].displayInLayerSwitcher) continue;
-	        var option = document.createElement('option');
-		option.appendChild(document.createTextNode(baseLayers[x].get('title')));
-	        option.setAttribute('value', x);
-	        option.setAttribute('id', 'baseOption' + baseLayers[x].get('title'));
-	        layerSelect.appendChild(option);
-	    }
-
-// a generic attribution variable for NLS historic map tilesets
+	function getmapsheets(inlat, inlong) {
 	
-	var NLS_attribution = new ol.Attribution({
-	  html: 'Historic Map Layer courtesy of the <a href="http://maps.nls.uk/">National Library of Scotland</a>' 
-	});
+		setResults("Loading... please wait");
+	
+		features27700 = [];
+	
+		var latLng = marker.getPosition();
+	
+		inlat = deg2rad(latLng.lat());
+		inlon = deg2rad(latLng.lng());
+		
+// find current center in British National Grid Eastings and Northings
 
-// NLS historic map overlay layers
-
-    var oneinch2nd = new ol.layer.Tile({
-	title: "Great Britain - OS One Inch, 1885-1900",
-	source: new ol.source.XYZ({
-				url: "http://geo.nls.uk/maps/os/1inch_2nd_ed/{z}/{x}/{-y}.png",
-				attributions: [NLS_attribution],
-				minZoom: 8,
-				maxZoom: 15
-		  }),
-        type: 'overlay', 
-        visible: false
-    });
-
-    var bartgreatbritain = new ol.layer.Tile({
-	title: "Great Britain  - Bartholomew Half Inch, 1897-1907",
-	source: new ol.source.XYZ({
-				url: "http://geo.nls.uk/mapdata2/bartholomew/great_britain/{z}/{x}/{-y}.png",
-				attributions: [NLS_attribution],
-				minZoom: 8,
-				maxZoom: 14
-		  }),
-        type: 'overlay', 
-        visible: false
-    });
-
-     var quarterinchscotland = new ol.layer.Tile({
-	title: "Scotland - OS Quarter Inch, 1921-1923",
-	source: new ol.source.XYZ({
-				url: "http://geo.nls.uk/maps/os/quarter/{z}/{x}/{-y}.png",
-				attributions: [NLS_attribution],
-				minZoom: 8,
-				maxZoom: 12
-		  }),
-        type: 'overlay', 
-	visible: false
-    });
+		var osgb36 = WGS842OSGB36(inlat, inlon); var cooresult = Geo2TM(osgb36.latitude, osgb36.longitude, OSNG);
+		var refresult = conv_EN2GR(cooresult.eastings, cooresult.northings, OSNG_GS);
+		var eastings = Math.round(cooresult.eastings);
+		var northings = Math.round(cooresult.northings);
 
 
-	overlayLayers = [oneinch2nd, bartgreatbritain, quarterinchscotland];
+// the WFS request to GeoServer
 
-// Change the layer in this line below to the initial overlay layer that is set to true
+	TypeName  = 'nls:catalog_25inch,nls:catalog_25_inch_2nd_later,nls:OS_25_Inch_Eng_Wales,nls:OS_6inch_UK_27700';
 
-	oneinch2nd.setVisible(true);
+// the WFS request to GeoServer
 
-// the main ol map class, with two layers and defaulting to a specific view
+	var urlgeoserver =  'http://geoserver.nls.uk/geodata/wfs?service=WFS' + 
+				'&version=1.1.0&request=GetFeature&typename=' + TypeName +
+				'&outputFormat=text/javascript&format_options=callback:getJson27700' +
+				'&srsname=EPSG:3857&cql_filter=INTERSECTS(the_geom,POINT(' 
+				+ eastings + ' ' + northings + '))'; 
 
-		var map = new ol.Map({
-		  target: 'map',
-		  renderer: 'canvas',
-		  layers: [BingAerialWithLabels, oneinch2nd],
-		  controls: ol.control.defaults({ attributionOptions: { collapsed: true, collapsible: true }}),
-		  logo: false,
-		  view: new ol.View({
-		    center: ol.proj.transform([-4.0, 56.0], 'EPSG:4326', 'EPSG:3857'),
-		    zoom: 5
-		  })
+// The GeoJSON response from the jQuery ajax Web Feature Service request and callback
+
+
+	window.handleJson27700 = function(response) {
+			features = response.features;
+
+
+// gets date range from slider and filters results
+
+		dates = [];
+		dates = $( "#slider-range" ).slider( "values");
+		var minyear = dates[0];
+		var maxyear = dates[1];
+
+
+		filteredFeatures1 = jQuery.grep(features, function(n, i){
+		  return n.properties.YEAR > minyear;
+		});
+
+		filteredFeatures = jQuery.grep(filteredFeatures1, function(n, i){
+		  return n.properties.YEAR < maxyear;
 		});
 
 
 
-// Change base layer
+		var content = '';
 
-	var changemap = function(index) {
-	  map.getLayers().removeAt(0);
-	  map.getLayers().insertAt(0,baseLayers[index]);
-	}
+		if (filteredFeatures.length < 1)
+			content += '<br/><p id="noMapsSelected">No maps returned</p>';
 
+		else if (filteredFeatures.length == 1)
+	            content += '<p><strong>Results - 1 map:</strong><br />(click to view)</p>';
+		else if (features.length > 1)
 
-// add the OL ZoomSlider and ScaleLine controls
+	        content += '<p><strong>Results - ' + filteredFeatures.length + ' maps:</strong><br />(Ordered by date - <br/>click to view)</p>';
 
-    map.addControl(new ol.control.ZoomSlider());
-    map.addControl(new ol.control.ScaleLine({ units:'metric' }));
+		
 
-    var mouseposition = new ol.control.MousePosition({
-            projection: 'EPSG:4326',
-            coordinateFormat: function(coordinate) {
-	    // BNG: ol.extent.applyTransform([x, y], ol.proj.getTransform("EPSG:4326", "EPSG:27700"), 
-		var coord27700 = ol.proj.transform(coordinate, 'EPSG:4326', 'EPSG:27700');
-		var templatex = '{x}';
-		var outx = ol.coordinate.format(coord27700, templatex, 0);
-		var templatey = '{y}';
-		var outy = ol.coordinate.format(coord27700, templatey, 0);
-		NGR = gridrefNumToLet(outx, outy, 6);
-		var hdms = ol.coordinate.toStringHDMS(coordinate);
-		if ((outx  < 0) || (outx > 700000 ) || (outy < 0) || (outy > 1300000 )) {
-	        return '<strong>' + ol.coordinate.format(coordinate, '{x}, {y}', 4) + '&nbsp; <br/>&nbsp;' + hdms + ' &nbsp;'; 
+		if (filteredFeatures.length > 0) {
+
+// sorts the maps by YEAR
+
+		filteredFeatures.sort(function(a, b){
+		   var nameA=a.properties.YEAR, nameB=b.properties.YEAR
+		   if (nameA < nameB) //sort string ascending
+		       return -1 
+		   if (nameA > nameB)
+		       return 1
+		   return 0 //default return value (no sorting)
+
+		})
+
+		jQuery.each(filteredFeatures, function (key, val) {
+			geometry = val.geometry;
+			properties = val.properties;
+			if (properties.SHEET != '') {
+				content += '<p><a href="' + properties.IMAGEURL + '"><img src="' + properties.IMAGETHUMB + '" width="150" /><br />'  + properties.SHEET + '</a><br />' + properties.DATES + '</p>';
+							} 
+			});  
+					// content += stringResult.replace(/<br>/g, ', ');
 		}
-		else 
-                { return '<strong>' + NGR + '</strong>&nbsp; <br/>' + ol.coordinate.format(coord27700, '{x}, {y}', 0) + 
-			'&nbsp; <br/>' + ol.coordinate.format(coordinate, '{y}, {x}', 4) + '&nbsp; <br/>&nbsp;' + hdms + ' &nbsp;'; }
-            	}
-    });
+		setResults(content);
+		}
 
-    map.addControl(mouseposition);
-
-
-   
-// sets up the overlay layers as a set of radio buttons
-
-       var overlaySelect = document.getElementById('overlaySelect');
-           for (var x = 0; x < overlayLayers.length; x++) {
-              var checked = (overlayLayers[x].getVisible()) ? "checked" : "";
-              overlaySelect.innerHTML += '<p><input type="radio" name="overlay" id="overlayRadio'+ overlayLayers[x].get('title') + '" value="' + x + '" onClick="switchOverlay(this.value)" ' + checked + '><span>' + overlayLayers[x].get('title') + '</span></p>';
-       }
+		jQuery.ajax({
+			jsonp: false,
+			jsonpCallback: 'getJson27700',
+			url: urlgeoserver,
+			dataType: 'jsonp',
+			contentType: 'application/json',
+			success: handleJson27700
+		});
+	
+	};
 
 
-// function to change the overlay layer
-
-       function switchOverlay(index) {
-		map.getLayers().getArray()[1].setVisible(false);
-		map.getLayers().removeAt(1);
-		map.getLayers().insertAt(1,overlayLayers[index]);
-		overlaySelected = overlayLayers[index];
-	    	overlaySelected.setVisible(true);
-	    	map.getLayers().getArray()[1].setOpacity(opacity);
+	function checkmarker() {
+	
+	        var map_centre = map.getCenter();
+	 	if ( !map.getBounds().contains(marker.getPosition()))
+			{ marker.setPosition(map_centre); }
+		getmapsheets();
+	
 	}
 
-// Sets up an opacity slider on the overlay layer
+	function check_is_in_or_out(marker){
+	  return map.getBounds().contains(marker.getPosition());
+	}
 
-   jQuery( document ).ready(function() {
-	jQuery('#mapslider').slider({
-	  formater: function(value) {
-	    opacity = value / 100;
-	    map.getLayers().getArray()[1].setOpacity(opacity);
-	    // overlay.layer.setOpacity(opacity);
-	    return 'Opacity: ' + value + '%';
-	  }
+
+
+// Auto text for right-hand results panel
+
+	function setResults(str) {
+	    if (!str) str = "<br/><p id=\"noMapsSelected\">No maps selected</p>";
+	    document.getElementById('results').innerHTML = str;
+	}
+
+
+      setResults();
+
+// Main Google Maps API functions - documentation at: https://developers.google.com/maps/documentation/javascript/ 
+
+      function initMap() {
+
+	var bounds;
+	var features27700;
+
+	var currentLat = 56.0;
+	var currentLon = -4.0;
+
+        var mapBounds = new google.maps.LatLngBounds(
+            new google.maps.LatLng(49.205882, -14.169172),
+            new google.maps.LatLng(61.483786, 4.393046));
+        var mapMinZoom = 1;
+        var mapMaxZoom = 17;
+
+        var map_centre = {lat: currentLat, lng: currentLon};
+
+        map = new google.maps.Map(document.getElementById('map'), {
+          center: map_centre,
+          zoom: 7,
+ 	  mapTypeControl: true,
+          mapTypeControlOptions: {
+	      mapTypeIds:[google.maps.MapTypeId.SATELLITE,google.maps.MapTypeId.ROADMAP],
+              style: google.maps.MapTypeControlStyle.HORIZONTAL_BAR,
+              position: google.maps.ControlPosition.BOTTOM_CENTER
+          },
+          zoomControl: true,
+          zoomControlOptions: {
+              position: google.maps.ControlPosition.LEFT_BOTTOM
+          },
+          scaleControl: true,
+          streetViewControl: false
+
+        });
+
+
+
+	map.setMapTypeId(google.maps.MapTypeId.ROADMAP);
+
+        var input = /** @type {!HTMLInputElement} */(
+            document.getElementById('pac-input'));
+
+       // var types = document.getElementById('type-selector');
+        map.controls[google.maps.ControlPosition.TOP_LEFT].push(input);
+       // map.controls[google.maps.ControlPosition.TOP_LEFT].push(types);
+
+
+
+        var autocomplete = new google.maps.places.Autocomplete(input);
+        autocomplete.bindTo('bounds', map);
+
+        var infowindow = new google.maps.InfoWindow();
+
+
+
+        autocomplete.addListener('place_changed', function() {
+
+       google.maps.event.removeListener(zoomchangedlistener);
+          infowindow.close();
+          marker.setVisible(false);
+          var place = autocomplete.getPlace();
+          if (!place.geometry) {
+            window.alert("Autocomplete's returned place contains no geometry");
+            return;
+          }
+
+
+          // If the place has a geometry, then present it on a map.
+          if (place.geometry.viewport) {
+            map.fitBounds(place.geometry.viewport);
+          } else {
+            map.setCenter(place.geometry.location);
+            map.setZoom(17);  // Why 17? Because it looks good.
+
+          }
+
+          marker.setPosition(place.geometry.location);
+          marker.setVisible(true);
+
+	  latLng = marker.getPosition();
+          var mlat = latLng.lat().toFixed(4);
+	  var mlon = latLng.lng().toFixed(4);
+
+	  var mapcenter = map.getCenter();
+
+          getmapsheets(mlat,mlon);
+
+          var address = '';
+          if (place.address_components) {
+            address = [
+              (place.address_components[0] && place.address_components[0].short_name || ''),
+              (place.address_components[1] && place.address_components[1].short_name || ''),
+              (place.address_components[2] && place.address_components[2].short_name || '')
+            ].join(' ');
+          }
+
+	setTimeout( function(){
+		map.addListener('zoom_changed', function() {
+			
+			var latLng = marker.getPosition();
+			var lat = latLng.lat().toFixed(4);
+			var lon = latLng.lng().toFixed(4);
+	          	getmapsheets(lat,lon);
+
+		  });
+
+	}, 500); // delay 500 ms
+
+
+        });
+
+	google.maps.event.addDomListener(window, 'load', checkmarker);
+
+// request map sheets again if slider dates change
+
+	$( "#slider-range" ).on( "slidestop", function( event, ui ) { getmapsheets();  } );
+
+        var map_centre = {lat: currentLat, lng: currentLon};
+        var marker_centre = {lat: currentLat, lng: currentLon};
+	map.setCenter(map_centre);
+	map.setZoom(5);
+
+	marker = new google.maps.Marker({
+    	position: marker_centre,
+    	draggable: true,
+    	map: map
+  	});
+
+
+// marker listener to retrieve maps if marker is moved
+
+	  marker.addListener('center_changed', function() {
+		getmapsheets();
+	  });
+
+// initiates the date slider
+
+	$(document).ready(function(){
+	
+	   $( "#slider-range" ).slider({
+	      range: true,
+	      min: 1800,
+	      max: 2000,
+	      values: [ 1840, 1960 ],
+	      slide: function( event, ui ) {
+	        $( "#amount" ).val(  ui.values[ 0 ] + " - " + ui.values[ 1 ] );
+	      }
+	    });
+	    $( "#amount" ).val(   $( "#slider-range" ).slider( "values", 0 ) +
+	      " - " + $( "#slider-range" ).slider( "values", 1 ) );
+	  });
+
+// places the marker at double-clicked location
+
+	map.addListener('dblclick', function(e) {
+		showMarker(e.latLng);
+		getmapsheets();
+
 	});
-    });
+	
+	marker.addListener('dragend', function() {
+		var center = marker.getPosition();
+		getmapsheets();
 
+  	});
+	marker.addListener('click', function(e) {
+		//lookupAddress(e.latLng);
+		var center = marker.getPosition();
 
-// Initialize the Gazetteer with autocomplete and County+Parish selector
-
-	nlsgaz(function(minx,miny,maxx,maxy){
-
-      // zoom to gridref
-      if (miny == null) {
-         var osgbnum = gridrefLetToNum(minx);
-	 // console.log(osgbnum);
-         // var osgb = new OpenLayers.LonLat(osgbnum[0], osgbnum[1]);
-	 point27700 = [];
-	 point27700.push(parseFloat(osgbnum[0]), parseFloat(osgbnum[1]));
-	 // console.log(point27700);
-	 point3857 = [];
-	 point3857 = ol.proj.transform(point27700,"EPSG:27700", "EPSG:3857");
-	 var a = map.getView().setCenter(point3857);
-    	 var b = map.getView().setZoom(6+minx.length);
-
-	 return a && b;
+		getmapsheets();
+	});
 
       }
-      // zoom to bbox
-      var extent = [minx, miny, maxx, maxy];
-        extent = ol.extent.applyTransform(extent, ol.proj.getTransform("EPSG:4326", "EPSG:3857"));
-        map.getView().fitExtent(extent, map.getSize());
-       
-	if (map.getView().getZoom() > 16 )
-	{map.getView().setZoom(16);}
-
-     });
-
-
-	
 
 
